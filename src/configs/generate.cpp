@@ -546,8 +546,7 @@ namespace Configs {
                     {"domain", "localhost"},
                     {"action", "predefined"},
                     {"query_type", "AAAA"},
-                    {"rcode", "NOERROR"},
-                    {"answer", "localhost. IN AAAA ::1"},
+                    {"rcode", "NXDOMAIN"},
                 };
         }
 
