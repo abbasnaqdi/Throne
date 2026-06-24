@@ -388,6 +388,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             case 2: sortType = Stats::ByProtocol; break;
             case 3: sortType = Stats::ByOutbound; break;
             case 4: sortType = Stats::ByTraffic; break;
+            case 5: sortType = Stats::BySpeed; break;
             default: sortType = Stats::Default; break;
             }
 
@@ -1759,11 +1760,13 @@ void MainWindow::setupConnectionList()
     ui->connections->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     ui->connections->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     ui->connections->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    ui->connections->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
     ui->connections->verticalHeader()->hide();
+    setupConnectionSortMenu();
     connect(ui->connections, &QTableWidget::cellClicked, this, [=,this](int row, int column)
     {
-        if (column > 3) return;
         auto selected = ui->connections->item(row, column);
+        if (selected == nullptr) return;
         QApplication::clipboard()->setText(selected->text());
         QPoint pos = ui->connections->mapToGlobal(ui->connections->visualItemRect(selected).center());
         QToolTip::showText(pos, "Copied!", this);
@@ -1775,6 +1778,52 @@ void MainWindow::setupConnectionList()
             }
             QToolTip::hideText();
         });
+    });
+}
+
+// Right-click on the Traffic / Speed headers to pick which sub-field they sort
+// by, mirroring the proxy list's header context menu. Left-clicking a header
+// still sorts (by total for these two columns); this just exposes down/up.
+void MainWindow::setupConnectionSortMenu()
+{
+    auto* header = ui->connections->horizontalHeader();
+    header->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(header, &QWidget::customContextMenuRequested, this, [=,this](const QPoint& pos)
+    {
+        const int columnIndex = header->logicalIndexAt(pos);
+        const bool isTraffic = columnIndex == 4;
+        const bool isSpeed = columnIndex == 5;
+        if (!isTraffic && !isSpeed) return;
+
+        struct SortOption { Stats::ConnectionSort value; QString label; };
+        const QList<SortOption> options = isTraffic
+            ? QList<SortOption>{
+                { Stats::ByTraffic, tr("Total") },
+                { Stats::ByDownload, tr("Downloaded") },
+                { Stats::ByUpload, tr("Uploaded") } }
+            : QList<SortOption>{
+                { Stats::BySpeed, tr("Total") },
+                { Stats::ByDownloadSpeed, tr("Download Speed") },
+                { Stats::ByUploadSpeed, tr("Upload Speed") } };
+
+        QMenu menu(this);
+        auto* sortByLabel = menu.addAction(tr("Sort By:"));
+        sortByLabel->setEnabled(false);
+
+        const auto current = Stats::connection_lister->getSort();
+        for (const auto& opt : options)
+        {
+            auto* act = menu.addAction(opt.label);
+            act->setData(static_cast<int>(opt.value));
+            act->setCheckable(true);
+            act->setChecked(current == opt.value);
+        }
+
+        auto* chosen = menu.exec(header->mapToGlobal(pos));
+        if (chosen == nullptr || !chosen->data().isValid()) return;
+
+        Stats::connection_lister->setSort(static_cast<Stats::ConnectionSort>(chosen->data().toInt()));
+        Stats::connection_lister->ForceUpdate();
     });
 }
 
@@ -1809,6 +1858,9 @@ void MainWindow::UpdateConnectionList(const QMap<QString, Stats::ConnectionMetad
 
         // C4: Traffic
         ui->connections->item(row, 4)->setText(ReadableSize(conn.upload) + "↑" + " " + ReadableSize(conn.download) + "↓");
+
+        // C5: Speed
+        ui->connections->item(row, 5)->setText(ReadableSize(conn.uploadSpeed) + "/s↑" + " " + ReadableSize(conn.downloadSpeed) + "/s↓");
     }
     int row = ui->connections->rowCount();
     for (const auto& conn : toAdd)
@@ -1843,6 +1895,11 @@ void MainWindow::UpdateConnectionList(const QMap<QString, Stats::ConnectionMetad
         f = f0->clone();
         f->setText(ReadableSize(conn.upload) + "↑" + " " + ReadableSize(conn.download) + "↓");
         ui->connections->setItem(row, 4, f);
+
+        // C5: Speed
+        f = f0->clone();
+        f->setText(ReadableSize(conn.uploadSpeed) + "/s↑" + " " + ReadableSize(conn.downloadSpeed) + "/s↓");
+        ui->connections->setItem(row, 5, f);
 
         row++;
     }
@@ -1888,6 +1945,11 @@ void MainWindow::UpdateConnectionListWithRecreate(const QList<Stats::ConnectionM
         f = f0->clone();
         f->setText(ReadableSize(conn.upload) + "↑" + " " + ReadableSize(conn.download) + "↓");
         ui->connections->setItem(row, 4, f);
+
+        // C5: Speed
+        f = f0->clone();
+        f->setText(ReadableSize(conn.uploadSpeed) + "/s↑" + " " + ReadableSize(conn.downloadSpeed) + "/s↓");
+        ui->connections->setItem(row, 5, f);
 
         row++;
     }

@@ -361,6 +361,8 @@ private:
 
     void setupConnectionList();
 
+    void setupConnectionSortMenu();
+
     void querySpeedtest(const QMap<QString, int>& tag2entID, bool testCurrent);
 
     // Credit the delta between a test's cumulative bytes (curUp/curDown) and the

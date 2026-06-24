@@ -15,9 +15,12 @@ namespace Stats
         ByDownload,
         ByUpload,
         ByProcess,
-        ByTraffic,
+        ByTraffic, // total traffic = upload + download
         ByOutbound,
-        ByProtocol
+        ByProtocol,
+        ByDownloadSpeed,
+        ByUploadSpeed,
+        BySpeed // total speed = uploadSpeed + downloadSpeed
     };
 
     class ConnectionMetadata
@@ -35,6 +38,8 @@ namespace Stats
         QString process;     // basename, e.g. chrome.exe
         QString processPath; // full path (icon lookup etc.)
         long long closedAtMs = 0; // 0 while live
+        long long uploadSpeed = 0;   // bytes/sec, derived by the lister
+        long long downloadSpeed = 0; // bytes/sec, derived by the lister
     };
 
     class ConnectionLister
@@ -52,8 +57,23 @@ namespace Stats
 
         void setSort(ConnectionSort newSort);
 
+        ConnectionSort getSort() const { return sort; }
+
     private:
         void update();
+
+        // Last byte/time sample per live connection id, used to derive an
+        // instantaneous up/down rate by diffing cumulative counters. Self-prunes
+        // each poll (rebuilt from the current active set) so it stays bounded.
+        struct SpeedSample
+        {
+            qint64 upload = 0;
+            qint64 download = 0;
+            qint64 sampledAtMs = 0;
+            qint64 upSpeed = 0;
+            qint64 downSpeed = 0;
+        };
+        QHash<QString, SpeedSample> speedSamples_;
 
         QMutex mu;
 

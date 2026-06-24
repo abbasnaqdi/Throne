@@ -1,4 +1,5 @@
 #include <QThread>
+#include <QDateTime>
 #include <core/server/gen/libcore.pb.h>
 #include <include/api/RPC.h>
 #include "include/ui/mainwindow_interface.h"
@@ -9,6 +10,11 @@
 
 namespace Stats
 {
+    // Ignore samples taken closer together than this when deriving a rate, so
+    // out-of-band ForceUpdate() polls (e.g. on a header click) don't divide a
+    // tiny byte delta by a tiny interval and produce a misleading spike.
+    static constexpr qint64 kSpeedSampleMinMs = 500;
+
     ConnectionLister* connection_lister = new ConnectionLister();
 
     ConnectionLister::ConnectionLister()
@@ -61,14 +67,52 @@ namespace Stats
     void ConnectionLister::update()
     {
         libcore::QueryConnectionsResp resp = API::defaultClient->QueryConnections();
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
 
         QMap<QString, ConnectionMetadata> toUpdate;
         QMap<QString, ConnectionMetadata> toAdd;
         QSet<QString> newState;
         QList<ConnectionMetadata> sorted;
+        QHash<QString, SpeedSample> newSamples;
         for (const auto& conn : resp.active)
         {
             auto c = metaFromProto(conn);
+
+            // Derive an instantaneous rate by diffing this connection's
+            // cumulative byte counters against its previous sample. When polls
+            // arrive faster than the sampling window, carry the last rate and
+            // baseline forward unchanged so the number stays stable.
+            SpeedSample s;
+            if (const auto it = speedSamples_.constFind(c.id); it != speedSamples_.constEnd())
+            {
+                const qint64 dt = nowMs - it->sampledAtMs;
+                if (dt >= kSpeedSampleMinMs)
+                {
+                    qint64 dUp = c.upload - it->upload;
+                    qint64 dDown = c.download - it->download;
+                    if (dUp < 0) dUp = 0; // counters only grow; guard against any reset
+                    if (dDown < 0) dDown = 0;
+                    s.upload = c.upload;
+                    s.download = c.download;
+                    s.sampledAtMs = nowMs;
+                    s.upSpeed = dUp * 1000 / dt;
+                    s.downSpeed = dDown * 1000 / dt;
+                }
+                else
+                {
+                    s = *it; // window too short: keep last rate and baseline
+                }
+            }
+            else
+            {
+                s.upload = c.upload; // first sighting: seed baseline, no rate yet
+                s.download = c.download;
+                s.sampledAtMs = nowMs;
+            }
+            newSamples.insert(c.id, s);
+            c.uploadSpeed = s.upSpeed;
+            c.downloadSpeed = s.downSpeed;
+
             if (sort == Default)
             {
                 if (state->contains(c.id))
@@ -84,6 +128,7 @@ namespace Stats
             }
             newState.insert(c.id);
         }
+        speedSamples_ = newSamples; // drop ids for connections that have closed
 
         state->clear();
         for (const auto& id : newState) state->insert(id);
@@ -184,6 +229,40 @@ namespace Stats
                         return asc ? a.protocol > b.protocol : a.protocol < b.protocol;
                     });
             }
+            if (sort == ByTraffic)
+            {
+                std::sort(sorted.begin(), sorted.end(), [=,this](const ConnectionMetadata& a, const ConnectionMetadata& b)
+                    {
+                        const long long ta = a.upload + a.download, tb = b.upload + b.download;
+                        if (ta == tb) return asc ? a.id > b.id : a.id < b.id;
+                        return asc ? ta < tb : ta > tb;
+                    });
+            }
+            if (sort == ByDownloadSpeed)
+            {
+                std::sort(sorted.begin(), sorted.end(), [=,this](const ConnectionMetadata& a, const ConnectionMetadata& b)
+                    {
+                        if (a.downloadSpeed == b.downloadSpeed) return asc ? a.id > b.id : a.id < b.id;
+                        return asc ? a.downloadSpeed < b.downloadSpeed : a.downloadSpeed > b.downloadSpeed;
+                    });
+            }
+            if (sort == ByUploadSpeed)
+            {
+                std::sort(sorted.begin(), sorted.end(), [=,this](const ConnectionMetadata& a, const ConnectionMetadata& b)
+                    {
+                        if (a.uploadSpeed == b.uploadSpeed) return asc ? a.id > b.id : a.id < b.id;
+                        return asc ? a.uploadSpeed < b.uploadSpeed : a.uploadSpeed > b.uploadSpeed;
+                    });
+            }
+            if (sort == BySpeed)
+            {
+                std::sort(sorted.begin(), sorted.end(), [=,this](const ConnectionMetadata& a, const ConnectionMetadata& b)
+                    {
+                        const long long sa = a.uploadSpeed + a.downloadSpeed, sb = b.uploadSpeed + b.downloadSpeed;
+                        if (sa == sb) return asc ? a.id > b.id : a.id < b.id;
+                        return asc ? sa < sb : sa > sb;
+                    });
+            }
             runOnUiThread([=,this] {
                 auto m = GetMainWindow();
                 m->UpdateConnectionListWithRecreate(sorted);
@@ -198,34 +277,8 @@ namespace Stats
 
     void ConnectionLister::setSort(const ConnectionSort newSort)
     {
-        if (newSort == ByTraffic)
-        {
-            if (sort == ByDownload && asc)
-            {
-                sort = ByUpload;
-                asc = false;
-                return;
-            }
-            if (sort == ByUpload && asc)
-            {
-                sort = ByDownload;
-                asc = false;
-                return;
-            }
-            if (sort == ByDownload)
-            {
-                asc = true;
-                return;
-            }
-            if (sort == ByUpload)
-            {
-                asc = true;
-                return;
-            }
-            sort = ByDownload;
-            asc = false;
-            return;
-        }
+        // Re-selecting the active field flips its direction; a new field starts
+        // descending (largest / most-recent first).
         if (sort == newSort) asc = !asc;
         else
         {
