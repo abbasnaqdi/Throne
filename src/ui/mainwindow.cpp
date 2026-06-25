@@ -632,8 +632,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     trayMenu->addAction(ui->actionRemember_last_proxy);
     trayMenu->addAction(ui->actionAllow_LAN);
     trayMenu->addSeparator();
-    // Select Server submenu (dynamically populated with pagination)
-    constexpr int PAGE_CAPACITY = 15;
+    // Select Server submenu (dynamically populated by groups)
     trayServerMenu = new QMenu(tr("Select Server"));
     trayMenu->addMenu(trayServerMenu);
     connect(trayServerMenu, &QMenu::aboutToShow, this, [=, this]() {
@@ -644,50 +643,28 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             connect(stopAction, &QAction::triggered, this, [=, this]() { profile_stop(false, false, true); });
             trayServerMenu->addSeparator();
         }
-        // Build flat list of profiles, starting from the group of the running profile or currentGroup
-        int startGroupId = Configs::dataManager->settingsRepo->current_group;
-        if (running) startGroupId = running->gid;
         auto groupIds = Configs::dataManager->groupsRepo->GetGroupsTabOrder();
-        // Reorder groupIds so startGroupId comes first
-        int startIdx = groupIds.indexOf(startGroupId);
-        if (startIdx > 0) {
-            QList<int> reordered = groupIds.mid(startIdx) + groupIds.mid(0, startIdx);
-            groupIds = reordered;
-        }
-        QList<int> allProfileIDs;
         for (auto gid : groupIds) {
             auto group = Configs::dataManager->groupsRepo->GetGroup(gid);
-            allProfileIDs.append(group->Profiles());
-        }
-        int totalProfiles = allProfileIDs.size();
-        // Clamp page
-        int maxPage = qMax(0, (totalProfiles - 1) / PAGE_CAPACITY);
-        trayServerPage = qBound(0, trayServerPage, maxPage);
-        int offset = trayServerPage * PAGE_CAPACITY;
-        int end = qMin(offset + PAGE_CAPACITY, totalProfiles);
-        // Show ↑ if not on first page
-        if (trayServerPage > 0) {
-            auto *upAction = trayServerMenu->addAction(QStringLiteral("\u2191"));
-            connect(upAction, &QAction::triggered, this, [=, this]() {
-                trayServerPage--;
-                trayServerMenu->popup(trayServerMenu->pos());
+            if (!group || group->archive || group->Profiles().isEmpty()) continue;
+
+            QString groupTitle = group->name;
+            if (running && running->gid == gid) {
+                groupTitle = QStringLiteral("✓ ") + groupTitle;
+            }
+            auto *groupMenu = new QMenu(groupTitle, trayServerMenu);
+            connect(groupMenu, &QMenu::aboutToShow, this, [=, this, group]() {
+                groupMenu->clear();
+                auto profiles = group->Profiles();
+                auto neededProfilesIDNames = Configs::dataManager->profilesRepo->GetProfileIDNameMappedBatch(profiles);
+                for (const auto&[id, name] : neededProfilesIDNames) {
+                    auto *action = groupMenu->addAction(name);
+                    action->setCheckable(true);
+                    action->setChecked(running && running->id == id);
+                    connect(action, &QAction::triggered, this, [=, this]() { profile_start(id); });
+                }
             });
-        }
-        // Show profiles for current page
-        auto neededProfilesIDNames = Configs::dataManager->profilesRepo->GetProfileIDNameMappedBatch(allProfileIDs.sliced(offset, end - offset));
-        for (const auto&[id, name] : neededProfilesIDNames) {
-            auto *action = trayServerMenu->addAction(name);
-            action->setCheckable(true);
-            action->setChecked(running && running->id == id);
-            connect(action, &QAction::triggered, this, [=, this]() { profile_start(id); });
-        }
-        // Show ↓ if not on last page
-        if (trayServerPage < maxPage) {
-            auto *downAction = trayServerMenu->addAction(QStringLiteral("\u2193"));
-            connect(downAction, &QAction::triggered, this, [=, this]() {
-                trayServerPage++;
-                trayServerMenu->popup(trayServerMenu->pos());
-            });
+            trayServerMenu->addMenu(groupMenu);
         }
     });
     trayMenu->addSeparator();
@@ -706,6 +683,27 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     } else {
         trayMenu->addMenu(ui->menu_spmode);
     }
+
+    auto* trayRoutingMenu = new QMenu(tr("Select Routing"), trayMenu);
+    connect(trayRoutingMenu, &QMenu::aboutToShow, this, [=,this]() {
+        trayRoutingMenu->clear();
+        for (const auto& route : Configs::dataManager->routesRepo->GetAllRouteProfiles()) {
+            auto* action = new QAction(trayRoutingMenu);
+            action->setText(route->name);
+            action->setData(route->id);
+            action->setCheckable(true);
+            action->setChecked(Configs::dataManager->settingsRepo->current_route_id == route->id);
+            connect(action, &QAction::triggered, this, [=,this]() {
+                auto routeID = action->data().toInt();
+                if (Configs::dataManager->settingsRepo->current_route_id == routeID) return;
+                Configs::dataManager->settingsRepo->current_route_id = routeID;
+                Configs::dataManager->settingsRepo->Save();
+                if (Configs::dataManager->settingsRepo->started_id >= 0) profile_start(Configs::dataManager->settingsRepo->started_id);
+            });
+            trayRoutingMenu->addAction(action);
+        }
+    });
+    trayMenu->addMenu(trayRoutingMenu);
     trayMenu->addSeparator();
     trayMenu->addAction(ui->actionRestart_Proxy);
     trayMenu->addAction(ui->actionRestart_Program);
@@ -2057,6 +2055,9 @@ void MainWindow::refresh_status(const QString &traffic_update) {
         ui->label_running->setToolTip({});
     }
 
+    auto route = Configs::dataManager->routesRepo->GetRouteProfile(Configs::dataManager->settingsRepo->current_route_id);
+    QString activeRouteName = (route && route->name != "Default") ? route->name : "";
+
     auto make_title = [=,this](bool isTray) {
         QStringList tt;
         if (!isTray && Configs::IsAdmin()) tt << "[Admin]";
@@ -2067,8 +2068,8 @@ void MainWindow::refresh_status(const QString &traffic_update) {
         if (Configs::dataManager->settingsRepo->spmode_vpn && Configs::dataManager->settingsRepo->spmode_system_proxy) tt << "[Tun+" + tr("System Proxy") + "]";
         tt << software_name;
         if (!isTray) tt << QString(NKR_VERSION);
-        if (!Configs::dataManager->settingsRepo->active_routing.isEmpty() && Configs::dataManager->settingsRepo->active_routing != "Default") {
-            tt << "[" + Configs::dataManager->settingsRepo->active_routing + "]";
+        if (!activeRouteName.isEmpty()) {
+            tt << "[" + activeRouteName + "]";
         }
         if (running != nullptr) {
             tt << running->outbound->DisplayTypeAndName() + "@" + group_name;
