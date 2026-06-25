@@ -71,7 +71,7 @@ namespace Configs {
         int test_concurrent = 10;
         bool disable_traffic_stats = false;
         int current_group = 0; // group id
-        QString mux_protocol = "yamux";
+        QString mux_protocol = "smux";
         bool mux_padding = false;
         int mux_concurrency = 8;
         bool mux_default_on = false;
