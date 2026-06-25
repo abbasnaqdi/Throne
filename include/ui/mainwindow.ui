@@ -828,9 +828,6 @@ QTabBar::tab:selected {
    <property name="text">
     <string>QR Code and link</string>
    </property>
-   <property name="shortcut">
-    <string notr="true">Ctrl+Q</string>
-   </property>
   </action>
   <action name="menu_copy_link">
    <property name="text">
