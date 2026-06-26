@@ -656,7 +656,8 @@ QTabBar::tab:selected {
     </widget>
     <addaction name="actionHide_window"/>
     <addaction name="separator"/>
-    <addaction name="menu_add_from_clipboard2"/>
+    <addaction name="menu_add_from_input"/>
+    <addaction name="menu_add_from_clipboard"/>
     <addaction name="actionAdd_profile_from_File"/>
     <addaction name="menu_scan_qr"/>
     <addaction name="separator"/>
@@ -698,6 +699,8 @@ QTabBar::tab:selected {
     </widget>
     <addaction name="menu_add_from_input"/>
     <addaction name="menu_add_from_clipboard"/>
+    <addaction name="actionAdd_profile_from_File"/>
+    <addaction name="menu_scan_qr"/>
     <addaction name="separator"/>
     <addaction name="menu_start"/>
     <addaction name="menu_stop"/>
@@ -812,11 +815,6 @@ QTabBar::tab:selected {
    </property>
    <property name="shortcut">
     <string notr="true">Del</string>
-   </property>
-  </action>
-  <action name="menu_add_from_clipboard2">
-   <property name="text">
-    <string>Add profile from clipboard</string>
    </property>
   </action>
   <action name="menu_profile_debug_info">
