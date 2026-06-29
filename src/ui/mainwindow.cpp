@@ -30,6 +30,7 @@
 
 
 #include "include/database/RoutesRepo.h"
+#include "include/global/Common.h"
 
 #include "include/ui/utils/ProfilesTableFilterHeader.h"
 
@@ -1338,6 +1339,7 @@ void MainWindow::rebuildTrayServerMenu() {
     pageIds.reserve(end - start);
     for (int i = start; i < end; ++i) pageIds.append(profiles[i]);
     auto mappedIdNames = Configs::dataManager->profilesRepo->GetProfileIDNameMappedBatch(pageIds);
+    mappedIdNames = FixProfileDisplayName(mappedIdNames);
     for (const auto&[id, name] : mappedIdNames) {
         auto *action = trayServerMenu->addAction(name);
         action->setCheckable(true);
@@ -3340,12 +3342,24 @@ void MainWindow::RegisterHotkey(bool unregister) {
     }
 }
 
-void MainWindow::registerMenuShortcuts(QMenu *menu) {
+void MainWindow::collectMenuShortcuts(QMenu *menu, QSet<QKeySequence> &out) {
     for (const auto &action: menu->actions()) {
         if (auto *sub = action->menu()) {
-            registerMenuShortcuts(sub);
+            collectMenuShortcuts(sub, out);
         } else if (!action->shortcut().isEmpty()) {
-            hiddenMenuShortcuts.append(new QShortcut(action->shortcut(), this, [=,this](){
+            out.insert(action->shortcut());
+        }
+    }
+}
+
+void MainWindow::registerMenuShortcuts(QMenu *menu, QSet<QKeySequence> &claimed) {
+    for (const auto &action: menu->actions()) {
+        if (auto *sub = action->menu()) {
+            registerMenuShortcuts(sub, claimed);
+        } else if (!action->shortcut().isEmpty()) {
+            if (claimed.contains(action->shortcut())) continue;
+            claimed.insert(action->shortcut());
+            hiddenMenuShortcuts.append(new QShortcut(action->shortcut(), this, [=](){
                 action->trigger();
             }));
         }
@@ -3358,11 +3372,17 @@ void MainWindow::RegisterHiddenMenuShortcuts(bool unregister) {
 
     if (unregister) return;
 
-    registerMenuShortcuts(ui->menuHidden_menu);
-    // menu_server used to ride along on a toolbutton's menu, which kept its action
-    // shortcuts (Start/Return, Delete/Del, …) alive. It's now a right-click-only
-    // popup, so — like the hidden menu — its shortcuts must be registered manually.
-    registerMenuShortcuts(ui->menu_server);
+    // Seed with the shortcuts Qt already activates on its own: these menus are
+    // attached to visible toolButtons via setMenu(), so their actions' shortcuts
+    // are registered automatically. We must not register them a second time.
+    QSet<QKeySequence> claimed;
+    collectMenuShortcuts(ui->menu_program, claimed);
+    collectMenuShortcuts(ui->menu_preferences, claimed);
+    collectMenuShortcuts(ui->menuRouting_Menu, claimed);
+    collectMenuShortcuts(ui->menuTools, claimed);
+
+    registerMenuShortcuts(ui->menuHidden_menu, claimed);
+    registerMenuShortcuts(ui->menu_server, claimed);
 }
 
 void MainWindow::setActionsData()
