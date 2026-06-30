@@ -601,6 +601,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     ui->profilesTableView->horizontalHeader()->setResizeContentsPrecision(0);
 
     connect(ui->profilesTableView->verticalScrollBar(), &QScrollBar::valueChanged, ui->profilesTableView, [=, this] {
+        if (!ui->profilesTableView->isVisible()) return;
         refresh_proxy_list_column_size();
     });
 
@@ -1178,6 +1179,7 @@ void MainWindow::changeEvent(QEvent *event) {
 void MainWindow::showEvent(QShowEvent *event) {
     QMainWindow::showEvent(event);
     syncConnectionViewState();
+    scheduleProxyListRefresh();
 }
 
 void MainWindow::hideEvent(QHideEvent *event) {
@@ -2366,10 +2368,16 @@ void MainWindow::refresh_groups() {
 
 void MainWindow::refresh_proxy_list_column_size() {
     auto group = Configs::dataManager->groupsRepo->CurrentGroup();
-    if (!group) return;
+    if (!group || !ui->profilesTableView->isVisible()) return;
 
     auto *hHeader = dynamic_cast<ProfilesTableFilterHeader*>(ui->profilesTableView->horizontalHeader());
     QTimer::singleShot(0, ui->profilesTableView, [=, this]() {
+        // Stop the resizeSection / scrollbar-policy changes below from re-entering
+        // this routine via the vertical scrollbar's valueChanged signal.
+        if (m_adjustingColumns) return;
+        m_adjustingColumns = true;
+        QScrollBar *vBar = ui->profilesTableView->verticalScrollBar();
+        const bool vBarBlocked = vBar->blockSignals(true);
         hHeader->blockSignals(true);
         if (group->column_width.isEmpty()) {
             hHeader->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -2407,6 +2415,8 @@ void MainWindow::refresh_proxy_list_column_size() {
         }
         hHeader->adjustPositions();
         hHeader->blockSignals(false);
+        vBar->blockSignals(vBarBlocked);
+        m_adjustingColumns = false;
     });
 }
 

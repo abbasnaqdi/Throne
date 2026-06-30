@@ -333,6 +333,8 @@ private:
     QTimer *m_proxyListRefreshDebounce = nullptr;
     void scheduleProxyListRefresh();
 
+    bool m_adjustingColumns = false;
+
     // Watches the physical default-route interface while a profile whose Xray
     // egress is interface-bound (sockopt.interface) is running. A static bind is
     // baked at build time, so when the default route flips (Wi-Fi<->Ethernet,
